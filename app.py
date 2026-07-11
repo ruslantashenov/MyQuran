@@ -3,8 +3,34 @@ import librosa
 import numpy as np
 import requests
 import io
+import base64
+import os
 
 st.set_page_config(page_title="Тренажёр чтения Корана", page_icon="📖", layout="centered")
+
+
+@st.cache_data(show_spinner=False)
+def load_font_css() -> str:
+    """Встраивает шрифт Uthman Taha Naskh (файл рядом с app.py) через @font-face."""
+    font_path = os.path.join(os.path.dirname(__file__), "KFGQPC_Uthman_Taha_Naskh_Regular.ttf")
+    try:
+        with open(font_path, "rb") as f:
+            font_b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"""
+        <style>
+        @font-face {{
+            font-family: 'UthmanTahaNaskh';
+            src: url(data:font/ttf;base64,{font_b64}) format('truetype');
+        }}
+        </style>
+        """
+    except FileNotFoundError:
+        return ""
+
+
+font_css = load_font_css()
+if font_css:
+    st.markdown(font_css, unsafe_allow_html=True)
 
 st.title("📖 Личный тренажёр чтения Корана")
 st.caption("Эталон: шейх Махмуд Халиль аль-Хусари")
@@ -139,7 +165,7 @@ def show_legend(found_rules: dict):
 def arabic_block(html: str):
     st.markdown(
         f'<div dir="rtl" style="font-size:30px; line-height:2.3; text-align:right; '
-        f'font-family: \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
+        f'font-family: \'UthmanTahaNaskh\', \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
         unsafe_allow_html=True,
     )
 
@@ -263,6 +289,7 @@ def comparison_block(sura: int, ayat: int):
 # ---------------------------------------------------------------------------
 
 mode = st.radio("Режим чтения:", ["По аяту", "По странице мусхафа"], horizontal=True)
+show_tajweed = st.toggle("🎨 Подсветка правил таджвида", value=True)
 
 if mode == "По аяту":
     col1, col2 = st.columns(2)
@@ -274,9 +301,12 @@ if mode == "По аяту":
     st.markdown("### 📜 Текст аята")
     ayah_text = get_ayah_text(int(sura), int(ayat))
     if ayah_text:
-        html, found = render_tajweed_html(ayah_text)
-        arabic_block(html)
-        show_legend(found)
+        if show_tajweed:
+            html, found = render_tajweed_html(ayah_text)
+            arabic_block(html)
+            show_legend(found)
+        else:
+            arabic_block(ayah_text)
     else:
         st.warning("Не удалось загрузить текст аята.")
 
@@ -291,8 +321,11 @@ else:
 
     if ayahs:
         for a in ayahs:
-            html, _ = render_tajweed_html(a["text"])
-            arabic_block(html)
+            if show_tajweed:
+                html, _ = render_tajweed_html(a["text"])
+                arabic_block(html)
+            else:
+                arabic_block(a["text"])
         st.caption(f"На странице: {ayahs[0]['sura_name']} — всего аятов: {len(ayahs)}")
 
         st.markdown("---")
