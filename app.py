@@ -252,10 +252,21 @@ def get_ayah_text(sura: int, ayat: int) -> str | None:
         return None
 
 
+RUSSIAN_TRANSLATIONS = {
+    "ru.kuliev": "Эльмир Кулиев",
+    "ru.osmanov": "Магомед-Нури Османов",
+    "ru.porokhova": "Валерия Порохова",
+    "ru.abuadel": "Абу Адель",
+    "ru.krachkovsky": "Игнатий Крачковский",
+    "ru.muntahab": "Аль-Мунтахаб",
+    "ru.sablukov": "Гордий Саблуков",
+}
+
+
 @st.cache_data(show_spinner=False)
-def get_ayah_translation(sura: int, ayat: int) -> str | None:
-    """Русский перевод (Эльмир Кулиев). Если не загрузится — просто не покажем перевод."""
-    url = f"https://api.alquran.cloud/v1/ayah/{sura}:{ayat}/ru.kuliev"
+def get_ayah_translation(sura: int, ayat: int, edition: str = "ru.kuliev") -> str | None:
+    """Русский перевод. Если не загрузится — просто не покажем перевод."""
+    url = f"https://api.alquran.cloud/v1/ayah/{sura}:{ayat}/{edition}"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
@@ -265,9 +276,9 @@ def get_ayah_translation(sura: int, ayat: int) -> str | None:
 
 
 @st.cache_data(show_spinner=False)
-def get_page_ayahs(page: int) -> list[dict] | None:
+def get_page_ayahs(page: int, edition: str = "ru.kuliev") -> list[dict] | None:
     """Возвращает список аятов целой страницы мусхафа (1–604), с текстом и переводом."""
-    url = f"https://api.alquran.cloud/v1/page/{page}/editions/quran-uthmani,ru.kuliev"
+    url = f"https://api.alquran.cloud/v1/page/{page}/editions/quran-uthmani,{edition}"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
@@ -290,9 +301,9 @@ def get_page_ayahs(page: int) -> list[dict] | None:
 
 
 @st.cache_data(show_spinner=False)
-def get_juz_ayahs(juz: int) -> list[dict] | None:
+def get_juz_ayahs(juz: int, edition: str = "ru.kuliev") -> list[dict] | None:
     """Возвращает список аятов целого джуза (1–30), с текстом и переводом."""
-    url = f"https://api.alquran.cloud/v1/juz/{juz}/editions/quran-uthmani,ru.kuliev"
+    url = f"https://api.alquran.cloud/v1/juz/{juz}/editions/quran-uthmani,{edition}"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
