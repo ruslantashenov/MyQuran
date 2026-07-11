@@ -11,27 +11,40 @@ st.set_page_config(page_title="Тренажёр чтения Корана", page
 
 
 @st.cache_data(show_spinner=False)
-def load_font_css() -> str:
-    """Встраивает шрифт Uthman Taha Naskh (файл рядом с app.py) через @font-face."""
-    font_path = os.path.join(os.path.dirname(__file__), "KFGQPC_Uthman_Taha_Naskh_Regular.ttf")
-    try:
-        with open(font_path, "rb") as f:
-            font_b64 = base64.b64encode(f.read()).decode("ascii")
-        return f"""
-        <style>
-        @font-face {{
-            font-family: 'UthmanTahaNaskh';
-            src: url(data:font/ttf;base64,{font_b64}) format('truetype');
-        }}
-        </style>
-        """
-    except FileNotFoundError:
-        return ""
+def load_font_css() -> tuple[str, str]:
+    """Встраивает шрифт Uthman Taha Naskh (файл рядом с app.py) через @font-face.
+    Возвращает (css, диагностика)."""
+    directory = os.path.dirname(os.path.abspath(__file__))
+    font_path = os.path.join(directory, "KFGQPC_Uthman_Taha_Naskh_Regular.ttf")
+    if not os.path.exists(font_path):
+        try:
+            files_here = os.listdir(directory)
+        except OSError:
+            files_here = []
+        return "", (
+            f"Файл шрифта не найден по пути `{font_path}`. "
+            f"Файлы в этой папке репозитория: {files_here}. "
+            f"Проверьте, что .ttf лежит РЯДОМ с app.py (не во вложенной папке) "
+            f"и называется ровно `KFGQPC_Uthman_Taha_Naskh_Regular.ttf`."
+        )
+    with open(font_path, "rb") as f:
+        font_b64 = base64.b64encode(f.read()).decode("ascii")
+    css = f"""
+    <style>
+    @font-face {{
+        font-family: 'UthmanTahaNaskh';
+        src: url(data:font/ttf;base64,{font_b64}) format('truetype');
+    }}
+    </style>
+    """
+    return css, ""
 
 
-font_css = load_font_css()
+font_css, font_debug = load_font_css()
 if font_css:
     st.markdown(font_css, unsafe_allow_html=True)
+elif font_debug:
+    st.warning(f"⚠️ Шрифт не подключился: {font_debug}")
 
 st.title("📖 Личный тренажёр чтения Корана")
 st.caption("Эталон: шейх Махмуд Халиль аль-Хусари")
@@ -117,38 +130,48 @@ def analyze_word_tajweed(word: str) -> list[tuple[int, int, str]]:
     return spans
 
 
-def render_tajweed_html(ayah_text: str) -> tuple[str, dict]:
-    """Строит HTML с подсветкой + собирает статистику встреченных правил."""
+def render_tajweed_html(ayah_text: str, flagged_words: set[int] | None = None) -> tuple[str, dict]:
+    """Строит HTML с подсветкой + собирает статистику встреченных правил.
+    flagged_words — индексы слов (по порядку в ayah_text.split(' ')), которые
+    отмечаются красной подчёркой как места вероятного расхождения со звуком эталона."""
+    flagged_words = flagged_words or set()
     found = {}
     words_html = []
-    for word in ayah_text.split(" "):
+    for w_idx, word in enumerate(ayah_text.split(" ")):
         spans = analyze_word_tajweed(word)
         if not spans:
-            words_html.append(word)
-            continue
-        tag_per_char = {}
-        for start, end, rule in spans:
-            for idx in range(start, end):
-                tag_per_char[idx] = rule
-            found[rule] = found.get(rule, 0) + 1
+            word_html = word
+        else:
+            tag_per_char = {}
+            for start, end, rule in spans:
+                for idx in range(start, end):
+                    tag_per_char[idx] = rule
+                found[rule] = found.get(rule, 0) + 1
 
-        chars = list(word)
-        html_parts = []
-        i = 0
-        while i < len(chars):
-            rule = tag_per_char.get(i)
-            if rule:
-                j = i
-                while j < len(chars) and tag_per_char.get(j) == rule:
-                    j += 1
-                color, _ = TAJWEED_COLORS[rule]
-                segment = "".join(chars[i:j])
-                html_parts.append(f'<span style="color:{color}">{segment}</span>')
-                i = j
-            else:
-                html_parts.append(chars[i])
-                i += 1
-        words_html.append("".join(html_parts))
+            chars = list(word)
+            html_parts = []
+            i = 0
+            while i < len(chars):
+                rule = tag_per_char.get(i)
+                if rule:
+                    j = i
+                    while j < len(chars) and tag_per_char.get(j) == rule:
+                        j += 1
+                    color, _ = TAJWEED_COLORS[rule]
+                    segment = "".join(chars[i:j])
+                    html_parts.append(f'<span style="color:{color}">{segment}</span>')
+                    i = j
+                else:
+                    html_parts.append(chars[i])
+                    i += 1
+            word_html = "".join(html_parts)
+
+        if w_idx in flagged_words:
+            word_html = (
+                f'<span style="border-bottom:4px solid #E00000; padding-bottom:2px;" '
+                f'title="Возможное расхождение со звуком эталона">{word_html}</span>'
+            )
+        words_html.append(word_html)
 
     html = " ".join(words_html)
     return html, found
@@ -239,6 +262,49 @@ def combine_ayah_audio(ayah_refs: tuple[tuple[int, int], ...]) -> bytes | None:
     return buf.getvalue()
 
 
+def find_mismatch_words(ayah_text: str, ref_bytes: bytes, user_bytes: bytes) -> set[int]:
+    """Приблизительно определяет, какие слова аята звучали заметно иначе, чем у
+    эталона. Это НЕ проверка правильности таджвида — только акустическое
+    расхождение (могло быть вызвано неверным словом, паузой, случайным шумом
+    и т.п.). Работает через выравнивание DTW и деление аудио на слова
+    пропорционально длине слов в тексте (приближение, не точная разметка)."""
+    words = ayah_text.split(" ")
+    if not words:
+        return set()
+
+    try:
+        y_ref, sr = librosa.load(io.BytesIO(ref_bytes), sr=None)
+        y_user, sr_user = librosa.load(io.BytesIO(user_bytes), sr=None)
+        if sr_user != sr:
+            y_user = librosa.resample(y_user, orig_sr=sr_user, target_sr=sr)
+
+        mfcc_ref = librosa.feature.mfcc(y=y_ref, sr=sr, n_mfcc=13)
+        mfcc_user = librosa.feature.mfcc(y=y_user, sr=sr, n_mfcc=13)
+        _, wp = librosa.sequence.dtw(X=mfcc_user, Y=mfcc_ref, subseq=True)
+        wp = wp[::-1]  # librosa отдаёт путь от конца к началу — разворачиваем
+
+        n_ref_frames = mfcc_ref.shape[1]
+        weights = [max(len(w), 1) for w in words]
+        total = sum(weights)
+        bounds = np.cumsum([0] + weights) / total * n_ref_frames
+
+        word_costs = [[] for _ in words]
+        for ui, ri in wp:
+            dist = float(np.linalg.norm(mfcc_user[:, ui] - mfcc_ref[:, ri]))
+            for wi in range(len(words)):
+                if bounds[wi] <= ri < bounds[wi + 1]:
+                    word_costs[wi].append(dist)
+                    break
+
+        avg_costs = np.array([np.mean(c) if c else 0.0 for c in word_costs])
+        if avg_costs.std() <= 0:
+            return set()
+        threshold = avg_costs.mean() + 0.75 * avg_costs.std()
+        return {i for i, c in enumerate(avg_costs) if c > threshold and c > 0}
+    except Exception:
+        return set()
+
+
 def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     y_ref, sr_ref = librosa.load(io.BytesIO(ref_bytes), sr=None)
     y_user, sr_user = librosa.load(io.BytesIO(user_bytes), sr=None)
@@ -264,9 +330,11 @@ def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     }
 
 
-def comparison_ui(ref_audio: bytes | None, key: str, label: str):
+def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str | None = None):
     """Общий блок: эталонное аудио + запись + сравнение. ref_audio может быть
-    записью одного аята или склеенным диапазоном/целой страницей."""
+    записью одного аята или склеенным диапазоном/целой страницей.
+    Если передан ayah_text (только для одного аята) — после сравнения
+    дополнительно показывает текст с подсветкой подозрительных слов."""
     if ref_audio:
         st.markdown("**🎧 Эталонное чтение (Аль-Хусари):**")
         st.audio(ref_audio, format="audio/wav" if ref_audio[:4] == b"RIFF" else "audio/mp3")
@@ -278,8 +346,9 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str):
 
     if st.button("🔥 Сравнить с эталоном", type="primary",
                   disabled=not (ref_audio and user_audio), key=f"btn_{key}"):
+        user_bytes = user_audio.read()
         with st.spinner("Анализирую..."):
-            result = analyze_audio(ref_audio, user_audio.read())
+            result = analyze_audio(ref_audio, user_bytes)
 
         st.subheader(f"📊 Результаты ({label})")
         c1, c2 = st.columns(2)
@@ -297,10 +366,26 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str):
             )
         else:
             st.success("Темп чтения близок к эталонному.")
+
+        if ayah_text:
+            with st.spinner("Ищу места расхождения со звуком эталона..."):
+                flagged = find_mismatch_words(ayah_text, ref_audio, user_bytes)
+            st.markdown("**🔴 Слова с наибольшим акустическим расхождением:**")
+            html, _ = render_tajweed_html(ayah_text, flagged_words=flagged)
+            arabic_block(html)
+            if flagged:
+                st.warning(
+                    "Слова с красной подчёркой звучали заметно иначе, чем в эталоне "
+                    "в это же время записи. Это **не подтверждённая ошибка** — просто "
+                    "сигнал 'вслушайтесь сюда ещё раз'. Причиной может быть неверное "
+                    "слово, запинка, пауза длиннее обычной или просто шум записи."
+                )
+            else:
+                st.caption("Явных мест сильного расхождения не найдено.")
+
         st.caption(
             "Напоминание: цифры отражают акустическое сходство целиком, а не "
-            "пословную проверку. Подсветка текста показывает, ГДЕ по правилам "
-            "должны быть мадд/ихфа/идгам — сверяйтесь на слух с эталоном именно там."
+            "формальную проверку правил таджвида по отдельности."
         )
 
 
