@@ -13,20 +13,39 @@ st.set_page_config(page_title="Тренажёр чтения Корана", page
 @st.cache_data(show_spinner=False)
 def load_font_css() -> tuple[str, str]:
     """Встраивает шрифт Uthman Taha Naskh (файл рядом с app.py) через @font-face.
+    Ищет файл по нескольким вариантам имени (с пробелами/подчёркиваниями), а если
+    не находит точное совпадение — берёт любой .ttf в этой же папке.
     Возвращает (css, диагностика)."""
     directory = os.path.dirname(os.path.abspath(__file__))
-    font_path = os.path.join(directory, "KFGQPC_Uthman_Taha_Naskh_Regular.ttf")
-    if not os.path.exists(font_path):
-        try:
-            files_here = os.listdir(directory)
-        except OSError:
-            files_here = []
+    try:
+        files_here = os.listdir(directory)
+    except OSError:
+        files_here = []
+
+    candidates = [
+        "KFGQPC_Uthman_Taha_Naskh_Regular.ttf",
+        "KFGQPC Uthman Taha Naskh Regular.ttf",
+    ]
+    font_path = None
+    for name in candidates:
+        p = os.path.join(directory, name)
+        if os.path.exists(p):
+            font_path = p
+            break
+
+    if font_path is None:
+        # запасной вариант: любой .ttf файл в папке рядом с app.py
+        ttf_files = [f for f in files_here if f.lower().endswith(".ttf")]
+        if ttf_files:
+            font_path = os.path.join(directory, ttf_files[0])
+
+    if font_path is None:
         return "", (
-            f"Файл шрифта не найден по пути `{font_path}`. "
-            f"Файлы в этой папке репозитория: {files_here}. "
-            f"Проверьте, что .ttf лежит РЯДОМ с app.py (не во вложенной папке) "
-            f"и называется ровно `KFGQPC_Uthman_Taha_Naskh_Regular.ttf`."
+            f"Файл шрифта (.ttf) не найден в папке `{directory}`. "
+            f"Файлы, которые там реально есть: {files_here}. "
+            f"Загрузите .ttf-файл шрифта в корень репозитория, рядом с app.py."
         )
+
     with open(font_path, "rb") as f:
         font_b64 = base64.b64encode(f.read()).decode("ascii")
     css = f"""
