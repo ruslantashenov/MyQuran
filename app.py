@@ -5,6 +5,7 @@ import requests
 import io
 import base64
 import os
+import soundfile as sf
 
 st.set_page_config(page_title="Тренажёр чтения Корана", page_icon="📖", layout="centered")
 
@@ -218,6 +219,26 @@ def get_page_ayahs(page: int) -> list[dict] | None:
         return None
 
 
+@st.cache_data(show_spinner=False)
+def combine_ayah_audio(ayah_refs: tuple[tuple[int, int], ...]) -> bytes | None:
+    """Склеивает эталонные записи нескольких аятов подряд в одну дорожку (с паузами)."""
+    sr_target = 22050
+    segments = []
+    for sura, ayat in ayah_refs:
+        mp3 = get_husary_audio(sura, ayat)
+        if mp3 is None:
+            return None
+        y, _ = librosa.load(io.BytesIO(mp3), sr=sr_target)
+        segments.append(y)
+        segments.append(np.zeros(int(0.4 * sr_target), dtype=y.dtype))  # пауза между аятами
+    if not segments:
+        return None
+    combined = np.concatenate(segments)
+    buf = io.BytesIO()
+    sf.write(buf, combined, sr_target, format="WAV")
+    return buf.getvalue()
+
+
 def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     y_ref, sr_ref = librosa.load(io.BytesIO(ref_bytes), sr=None)
     y_user, sr_user = librosa.load(io.BytesIO(user_bytes), sr=None)
@@ -243,25 +264,24 @@ def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     }
 
 
-def comparison_block(sura: int, ayat: int):
-    """Блок эталонного аудио + запись + сравнение для конкретного (sura, ayat)."""
-    ref_audio = get_husary_audio(sura, ayat)
-
+def comparison_ui(ref_audio: bytes | None, key: str, label: str):
+    """Общий блок: эталонное аудио + запись + сравнение. ref_audio может быть
+    записью одного аята или склеенным диапазоном/целой страницей."""
     if ref_audio:
         st.markdown("**🎧 Эталонное чтение (Аль-Хусари):**")
-        st.audio(ref_audio, format="audio/mp3")
+        st.audio(ref_audio, format="audio/wav" if ref_audio[:4] == b"RIFF" else "audio/mp3")
     else:
-        st.error("Не удалось загрузить эталонное аудио для этого аята.")
+        st.error("Не удалось загрузить эталонное аудио для этого фрагмента.")
 
     st.markdown("**🎙 Запишите ваше чтение:**")
-    user_audio = st.audio_input("Нажмите, чтобы начать запись", key=f"rec_{sura}_{ayat}")
+    user_audio = st.audio_input("Нажмите, чтобы начать запись", key=f"rec_{key}")
 
     if st.button("🔥 Сравнить с эталоном", type="primary",
-                  disabled=not (ref_audio and user_audio), key=f"btn_{sura}_{ayat}"):
+                  disabled=not (ref_audio and user_audio), key=f"btn_{key}"):
         with st.spinner("Анализирую..."):
             result = analyze_audio(ref_audio, user_audio.read())
 
-        st.subheader(f"📊 Результаты (Аят {sura}:{ayat})")
+        st.subheader(f"📊 Результаты ({label})")
         c1, c2 = st.columns(2)
         c1.metric("Совпадение звукового рисунка", f"{result['chroma_similarity']:.0f}%")
         c2.metric("Совпадение артикуляции (MFCC)", f"{result['mfcc_similarity']:.0f}%")
@@ -273,7 +293,7 @@ def comparison_block(sura: int, ayat: int):
         if diff > 2.0:
             st.warning(
                 "Заметная разница в темпе. Проверьте по подсветке выше, где в этом "
-                "аяте есть мадд — возможно, там вы недотягиваете или тянете дольше."
+                "фрагменте есть мадд — возможно, там вы недотягиваете или тянете дольше."
             )
         else:
             st.success("Темп чтения близок к эталонному.")
@@ -282,6 +302,20 @@ def comparison_block(sura: int, ayat: int):
             "пословную проверку. Подсветка текста показывает, ГДЕ по правилам "
             "должны быть мадд/ихфа/идгам — сверяйтесь на слух с эталоном именно там."
         )
+
+
+def comparison_block(sura: int, ayat: int):
+    """Сравнение для одного аята."""
+    ref_audio = get_husary_audio(sura, ayat)
+    comparison_ui(ref_audio, key=f"{sura}_{ayat}", label=f"Аят {sura}:{ayat}")
+
+
+def comparison_block_multi(ayah_list: list[dict], label: str):
+    """Сравнение для нескольких аятов подряд (диапазон или целая страница)."""
+    refs = tuple((a["sura"], a["ayat"]) for a in ayah_list)
+    ref_audio = combine_ayah_audio(refs)
+    key = "_".join(f"{s}-{a}" for s, a in refs)
+    comparison_ui(ref_audio, key=key, label=label)
 
 
 # ---------------------------------------------------------------------------
@@ -329,13 +363,42 @@ else:
         st.caption(f"На странице: {ayahs[0]['sura_name']} — всего аятов: {len(ayahs)}")
 
         st.markdown("---")
-        st.markdown("**Выберите аят с этой страницы для записи и сравнения с эталоном:**")
-        options = [f"{a['sura']}:{a['ayat']} — {a['sura_name']}" for a in ayahs]
-        choice = st.selectbox("Аят для записи", options)
-        idx = options.index(choice)
-        chosen = ayahs[idx]
+        st.markdown("**Как будете записывать чтение?**")
+        record_mode = st.radio(
+            "Способ записи:",
+            ["Один аят", "Диапазон аятов", "Вся страница"],
+            horizontal=True,
+            key=f"recmode_{page}",
+        )
 
-        st.markdown("---")
-        comparison_block(chosen["sura"], chosen["ayat"])
+        options = [f"{a['sura']}:{a['ayat']} — {a['sura_name']}" for a in ayahs]
+
+        if record_mode == "Один аят":
+            choice = st.selectbox("Аят для записи", options)
+            idx = options.index(choice)
+            chosen = ayahs[idx]
+            st.markdown("---")
+            comparison_block(chosen["sura"], chosen["ayat"])
+
+        elif record_mode == "Диапазон аятов":
+            c1, c2 = st.columns(2)
+            with c1:
+                start_choice = st.selectbox("С аята", options, index=0)
+            with c2:
+                end_choice = st.selectbox("По аят", options, index=len(options) - 1)
+            start_idx = options.index(start_choice)
+            end_idx = options.index(end_choice)
+            if start_idx > end_idx:
+                st.warning("Начальный аят должен быть раньше конечного.")
+            else:
+                selected = ayahs[start_idx:end_idx + 1]
+                st.caption(f"Выбрано аятов: {len(selected)}")
+                st.markdown("---")
+                comparison_block_multi(selected, label=f"{start_choice} — {end_choice}")
+
+        else:  # Вся страница
+            st.caption(f"Будет записана и сравнена вся страница целиком ({len(ayahs)} аятов).")
+            st.markdown("---")
+            comparison_block_multi(ayahs, label=f"Страница {int(page)}")
     else:
         st.warning("Не удалось загрузить эту страницу. Проверьте номер (1–604).")
