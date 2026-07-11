@@ -275,52 +275,68 @@ def get_ayah_translation(sura: int, ayat: int, edition: str = "ru.kuliev") -> st
         return None
 
 
+def _build_ayah_list(arabic_ayahs: list, translation_ayahs: list) -> list[dict]:
+    result = []
+    for i, a in enumerate(arabic_ayahs):
+        t = translation_ayahs[i]["text"] if i < len(translation_ayahs) else None
+        result.append({
+            "text": a.get("text", ""),
+            "translation": t,
+            "sura": a.get("surah", {}).get("number"),
+            "ayat": a.get("numberInSurah"),
+            "sura_name": a.get("surah", {}).get("name", ""),
+        })
+    return result
+
+
 @st.cache_data(show_spinner=False)
 def get_page_ayahs(page: int, edition: str = "ru.kuliev") -> list[dict] | None:
-    """Возвращает список аятов целой страницы мусхафа (1–604), с текстом и переводом."""
-    url = f"https://api.alquran.cloud/v1/page/{page}/editions/quran-uthmani,{edition}"
+    """Возвращает список аятов целой страницы мусхафа (1–604), с текстом и переводом.
+    Если совместный запрос (арабский+перевод) не удался — пробует запасной вариант
+    без перевода, вместо полного отказа."""
+    url_multi = f"https://api.alquran.cloud/v1/page/{page}/editions/quran-uthmani,{edition}"
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url_multi, timeout=25)
         r.raise_for_status()
         editions = r.json()["data"]
         arabic_ayahs = editions[0]["ayahs"]
         translation_ayahs = editions[1]["ayahs"] if len(editions) > 1 else []
-        result = []
-        for i, a in enumerate(arabic_ayahs):
-            t = translation_ayahs[i]["text"] if i < len(translation_ayahs) else None
-            result.append({
-                "text": a.get("text", ""),
-                "translation": t,
-                "sura": a.get("surah", {}).get("number"),
-                "ayat": a.get("numberInSurah"),
-                "sura_name": a.get("surah", {}).get("name", ""),
-            })
-        return result
+        return _build_ayah_list(arabic_ayahs, translation_ayahs)
+    except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
+        pass
+
+    url_arabic = f"https://api.alquran.cloud/v1/page/{page}/quran-uthmani"
+    try:
+        r = requests.get(url_arabic, timeout=25)
+        r.raise_for_status()
+        arabic_ayahs = r.json()["data"]["ayahs"]
+        return _build_ayah_list(arabic_ayahs, [])
     except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
         return None
 
 
 @st.cache_data(show_spinner=False)
 def get_juz_ayahs(juz: int, edition: str = "ru.kuliev") -> list[dict] | None:
-    """Возвращает список аятов целого джуза (1–30), с текстом и переводом."""
-    url = f"https://api.alquran.cloud/v1/juz/{juz}/editions/quran-uthmani,{edition}"
+    """Возвращает список аятов целого джуза (1–30), с текстом и переводом.
+    Джуз намного больше страницы (~200 аятов), поэтому даём больше времени на
+    ответ и, если совместный запрос не удался, пробуем запасной вариант без перевода."""
+    url_multi = f"https://api.alquran.cloud/v1/juz/{juz}/editions/quran-uthmani,{edition}"
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url_multi, timeout=30)
         r.raise_for_status()
         editions = r.json()["data"]
         arabic_ayahs = editions[0]["ayahs"]
         translation_ayahs = editions[1]["ayahs"] if len(editions) > 1 else []
-        result = []
-        for i, a in enumerate(arabic_ayahs):
-            t = translation_ayahs[i]["text"] if i < len(translation_ayahs) else None
-            result.append({
-                "text": a.get("text", ""),
-                "translation": t,
-                "sura": a.get("surah", {}).get("number"),
-                "ayat": a.get("numberInSurah"),
-                "sura_name": a.get("surah", {}).get("name", ""),
-            })
-        return result
+        return _build_ayah_list(arabic_ayahs, translation_ayahs)
+    except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
+        pass
+
+    url_arabic = f"https://api.alquran.cloud/v1/juz/{juz}/quran-uthmani"
+    try:
+        r = requests.get(url_arabic, timeout=30)
+        r.raise_for_status()
+        arabic_ayahs = r.json()["data"]["ayahs"]
+        return _build_ayah_list(arabic_ayahs, [])
     except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
         return None
 
@@ -526,6 +542,13 @@ with col_a:
 with col_b:
     show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
 
+translation_edition = "ru.kuliev"
+if show_translation:
+    translation_name = st.selectbox("Переводчик", list(RUSSIAN_TRANSLATIONS.values()), index=0)
+    translation_edition = next(
+        code for code, name in RUSSIAN_TRANSLATIONS.items() if name == translation_name
+    )
+
 font_size = st.select_slider(
     "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
 )
@@ -544,6 +567,8 @@ def render_ayah_with_translation(text: str, translation: str | None):
 
 def multi_ayah_section(ayahs: list[dict], unit_key: str):
     """Общий блок для страницы/джуза: показ текста + выбор способа записи."""
+    if show_translation and not any(a.get("translation") for a in ayahs):
+        st.caption("ℹ️ Перевод для этого фрагмента сейчас не загрузился — показан только арабский текст.")
     for a in ayahs:
         render_ayah_with_translation(a["text"], a.get("translation"))
     st.caption(f"Сур на этом фрагменте: {ayahs[0]['sura_name']} и др. — всего аятов: {len(ayahs)}")
@@ -609,7 +634,7 @@ if mode == "По аяту":
 
     st.markdown("### 📜 Текст аята")
     ayah_text = get_ayah_text(int(sura), int(ayat))
-    translation = get_ayah_translation(int(sura), int(ayat)) if show_translation else None
+    translation = get_ayah_translation(int(sura), int(ayat), translation_edition) if show_translation else None
     if ayah_text:
         render_ayah_with_translation(ayah_text, translation)
     else:
@@ -628,7 +653,7 @@ elif mode == "По странице мусхафа":
             st.session_state["cur_page"] = min(604, st.session_state["cur_page"] + 1)
 
     page = st.number_input("Номер страницы мусхафа (1–604)", min_value=1, max_value=604, step=1, key="cur_page")
-    ayahs = get_page_ayahs(int(page))
+    ayahs = get_page_ayahs(int(page), translation_edition)
     st.markdown(f"### 📜 Страница {int(page)}")
 
     if ayahs:
@@ -646,7 +671,7 @@ else:  # По джузу
             st.session_state["cur_juz"] = min(30, st.session_state["cur_juz"] + 1)
 
     juz = st.number_input("Номер джуза (1–30)", min_value=1, max_value=30, step=1, key="cur_juz")
-    ayahs = get_juz_ayahs(int(juz))
+    ayahs = get_juz_ayahs(int(juz), translation_edition)
     st.markdown(f"### 📜 Джуз {int(juz)}")
 
     if ayahs:
