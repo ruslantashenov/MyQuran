@@ -3,7 +3,6 @@ import librosa
 import numpy as np
 import requests
 import io
-import re
 
 st.set_page_config(page_title="Тренажёр чтения Корана", page_icon="📖", layout="centered")
 
@@ -43,6 +42,8 @@ IZHAR_LETTERS = set("ءهعحغخ")
 FATHA, DAMMA, KASRA, SUKUN, SHADDA = "\u064E", "\u064F", "\u0650", "\u0652", "\u0651"
 TANWEEN = {"\u064B", "\u064C", "\u064D"}
 MADD_LETTERS = {"ا": FATHA, "و": DAMMA, "ي": KASRA}
+DAGGER_ALIF = "\u0670"  # маленький "кинжальный" алиф — тоже мадд (напр. الرَّحْمَٰنِ)
+MADDAH = "\u0653"       # знак мадда над алифом (напр. آمنوا)
 
 
 def analyze_word_tajweed(word: str) -> list[tuple[int, int, str]]:
@@ -60,6 +61,10 @@ def analyze_word_tajweed(word: str) -> list[tuple[int, int, str]]:
 
         # Мадд: алиф/вав/я после соответствующей краткой гласной
         if ch in MADD_LETTERS and i > 0 and chars[i - 1] == MADD_LETTERS[ch]:
+            spans.append((max(0, i - 1), i + 1, "madd"))
+
+        # Мадд через кинжальный алиф / знак мадда (напр. الرَّحْمَٰنِ, آمنوا)
+        if ch in (DAGGER_ALIF, MADDAH):
             spans.append((max(0, i - 1), i + 1, "madd"))
 
         # Танвин / нун сакин — определяем следующую букву (в этом же слове)
@@ -94,7 +99,6 @@ def render_tajweed_html(ayah_text: str) -> tuple[str, dict]:
         if not spans:
             words_html.append(word)
             continue
-        # берём самый "сильный" тег на каждый символ (простая приоритизация)
         tag_per_char = {}
         for start, end, rule in spans:
             for idx in range(start, end):
@@ -123,6 +127,27 @@ def render_tajweed_html(ayah_text: str) -> tuple[str, dict]:
     return html, found
 
 
+def show_legend(found_rules: dict):
+    if found_rules:
+        legend_bits = []
+        for rule, count in found_rules.items():
+            color, name = TAJWEED_COLORS[rule]
+            legend_bits.append(f'<span style="color:{color}">●</span> {name} ({count})')
+        st.caption(" &nbsp;&nbsp; ".join(legend_bits), unsafe_allow_html=True)
+
+
+def arabic_block(html: str):
+    st.markdown(
+        f'<div dir="rtl" style="font-size:30px; line-height:2.3; text-align:right; '
+        f'font-family: \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Загрузка данных
+# ---------------------------------------------------------------------------
+
 @st.cache_data(show_spinner=False)
 def get_husary_audio(sura: int, ayat: int) -> bytes | None:
     sura_str, ayat_str = str(sura).zfill(3), str(ayat).zfill(3)
@@ -137,14 +162,33 @@ def get_husary_audio(sura: int, ayat: int) -> bytes | None:
 
 @st.cache_data(show_spinner=False)
 def get_ayah_text(sura: int, ayat: int) -> str | None:
-    """Получает арабский текст аята (Uthmani script) через alquran.cloud API."""
     url = f"https://api.alquran.cloud/v1/ayah/{sura}:{ayat}/quran-uthmani"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
-        data = r.json()
-        return data["data"]["text"]
-    except (requests.RequestException, KeyError):
+        return r.json()["data"]["text"]
+    except (requests.RequestException, KeyError, ValueError):
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def get_page_ayahs(page: int) -> list[dict] | None:
+    """Возвращает список аятов целой страницы мусхафа (1–604), с номерами суры/аята."""
+    url = f"https://api.alquran.cloud/v1/page/{page}/quran-uthmani"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()["data"]["ayahs"]
+        result = []
+        for a in data:
+            result.append({
+                "text": a.get("text", ""),
+                "sura": a.get("surah", {}).get("number"),
+                "ayat": a.get("numberInSurah"),
+                "sura_name": a.get("surah", {}).get("name", ""),
+            })
+        return result
+    except (requests.RequestException, KeyError, ValueError, TypeError):
         return None
 
 
@@ -173,75 +217,92 @@ def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     }
 
 
-col1, col2 = st.columns(2)
-with col1:
-    sura = st.number_input("Номер суры", min_value=1, max_value=114, value=1, step=1)
-with col2:
-    ayat = st.number_input("Номер аята", min_value=1, max_value=286, value=1, step=1)
+def comparison_block(sura: int, ayat: int):
+    """Блок эталонного аудио + запись + сравнение для конкретного (sura, ayat)."""
+    ref_audio = get_husary_audio(sura, ayat)
 
-ayah_text = get_ayah_text(int(sura), int(ayat))
-ref_audio = get_husary_audio(int(sura), int(ayat))
-
-st.markdown("### 📜 Текст аята")
-if ayah_text:
-    html, found_rules = render_tajweed_html(ayah_text)
-    st.markdown(
-        f'<div dir="rtl" style="font-size:32px; line-height:2.2; text-align:right; '
-        f'font-family: \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
-        unsafe_allow_html=True,
-    )
-    if found_rules:
-        legend_bits = []
-        for rule, count in found_rules.items():
-            color, name = TAJWEED_COLORS[rule]
-            legend_bits.append(
-                f'<span style="color:{color}">●</span> {name} ({count})'
-            )
-        st.caption(" &nbsp;&nbsp; ".join(legend_bits), unsafe_allow_html=True)
+    if ref_audio:
+        st.markdown("**🎧 Эталонное чтение (Аль-Хусари):**")
+        st.audio(ref_audio, format="audio/mp3")
     else:
-        st.caption("В этом аяте не обнаружено выделяемых правил (или все — изхар).")
-else:
-    st.warning("Не удалось загрузить текст аята.")
+        st.error("Не удалось загрузить эталонное аудио для этого аята.")
 
-if ref_audio:
-    st.markdown("**🎧 Эталонное чтение (Аль-Хусари):**")
-    st.audio(ref_audio, format="audio/mp3")
-else:
-    st.error("Не удалось загрузить эталонное аудио. Проверьте номер суры/аята.")
+    st.markdown("**🎙 Запишите ваше чтение:**")
+    user_audio = st.audio_input("Нажмите, чтобы начать запись", key=f"rec_{sura}_{ayat}")
 
-st.markdown("---")
-st.markdown("**🎙 Запишите ваше чтение:**")
-user_audio = st.audio_input("Нажмите, чтобы начать запись")
+    if st.button("🔥 Сравнить с эталоном", type="primary",
+                  disabled=not (ref_audio and user_audio), key=f"btn_{sura}_{ayat}"):
+        with st.spinner("Анализирую..."):
+            result = analyze_audio(ref_audio, user_audio.read())
 
-if st.button("🔥 Сравнить с эталоном", type="primary", disabled=not (ref_audio and user_audio)):
-    with st.spinner("Анализирую..."):
-        user_bytes = user_audio.read()
-        result = analyze_audio(ref_audio, user_bytes)
-
-    st.subheader(f"📊 Результаты (Аят {int(sura)}:{int(ayat)})")
-
-    c1, c2 = st.columns(2)
-    c1.metric("Совпадение звукового рисунка", f"{result['chroma_similarity']:.0f}%")
-    c2.metric("Совпадение артикуляции (MFCC)", f"{result['mfcc_similarity']:.0f}%")
-
-    st.write(
-        f"**Длительность эталона:** {result['dur_ref']:.1f} сек · "
-        f"**Ваша длительность:** {result['dur_user']:.1f} сек"
-    )
-
-    diff = abs(result["dur_ref"] - result["dur_user"])
-    if diff > 2.0:
-        st.warning(
-            "Заметная разница в общем темпе с эталоном. Проверьте по подсвеченному "
-            "выше тексту, где в этом аяте есть мадд — возможно, там вы либо "
-            "недотягиваете, либо тянете дольше положенного."
+        st.subheader(f"📊 Результаты (Аят {sura}:{ayat})")
+        c1, c2 = st.columns(2)
+        c1.metric("Совпадение звукового рисунка", f"{result['chroma_similarity']:.0f}%")
+        c2.metric("Совпадение артикуляции (MFCC)", f"{result['mfcc_similarity']:.0f}%")
+        st.write(
+            f"**Длительность эталона:** {result['dur_ref']:.1f} сек · "
+            f"**Ваша длительность:** {result['dur_user']:.1f} сек"
         )
-    else:
-        st.success("Общий темп чтения близок к эталонному.")
+        diff = abs(result["dur_ref"] - result["dur_user"])
+        if diff > 2.0:
+            st.warning(
+                "Заметная разница в темпе. Проверьте по подсветке выше, где в этом "
+                "аяте есть мадд — возможно, там вы недотягиваете или тянете дольше."
+            )
+        else:
+            st.success("Темп чтения близок к эталонному.")
+        st.caption(
+            "Напоминание: цифры отражают акустическое сходство целиком, а не "
+            "пословную проверку. Подсветка текста показывает, ГДЕ по правилам "
+            "должны быть мадд/ихфа/идгам — сверяйтесь на слух с эталоном именно там."
+        )
 
-    st.caption(
-        "Напоминание: цифры отражают акустическое сходство целиком, а не "
-        "пословную проверку. Подсветка текста выше показывает, ГДЕ по правилам "
-        "должны быть мадд/ихфа/идгам и т.д. — сверяйтесь на слух с эталоном "
-        "именно в этих местах."
-    )
+
+# ---------------------------------------------------------------------------
+# Интерфейс
+# ---------------------------------------------------------------------------
+
+mode = st.radio("Режим чтения:", ["По аяту", "По странице мусхафа"], horizontal=True)
+
+if mode == "По аяту":
+    col1, col2 = st.columns(2)
+    with col1:
+        sura = st.number_input("Номер суры", min_value=1, max_value=114, value=1, step=1)
+    with col2:
+        ayat = st.number_input("Номер аята", min_value=1, max_value=286, value=1, step=1)
+
+    st.markdown("### 📜 Текст аята")
+    ayah_text = get_ayah_text(int(sura), int(ayat))
+    if ayah_text:
+        html, found = render_tajweed_html(ayah_text)
+        arabic_block(html)
+        show_legend(found)
+    else:
+        st.warning("Не удалось загрузить текст аята.")
+
+    st.markdown("---")
+    comparison_block(int(sura), int(ayat))
+
+else:
+    page = st.number_input("Номер страницы мусхафа (1–604)", min_value=1, max_value=604, value=1, step=1)
+
+    ayahs = get_page_ayahs(int(page))
+    st.markdown(f"### 📜 Страница {int(page)}")
+
+    if ayahs:
+        for a in ayahs:
+            html, _ = render_tajweed_html(a["text"])
+            arabic_block(html)
+        st.caption(f"На странице: {ayahs[0]['sura_name']} — всего аятов: {len(ayahs)}")
+
+        st.markdown("---")
+        st.markdown("**Выберите аят с этой страницы для записи и сравнения с эталоном:**")
+        options = [f"{a['sura']}:{a['ayat']} — {a['sura_name']}" for a in ayahs]
+        choice = st.selectbox("Аят для записи", options)
+        idx = options.index(choice)
+        chosen = ayahs[idx]
+
+        st.markdown("---")
+        comparison_block(chosen["sura"], chosen["ayat"])
+    else:
+        st.warning("Не удалось загрузить эту страницу. Проверьте номер (1–604).")
