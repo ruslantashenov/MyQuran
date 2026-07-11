@@ -205,9 +205,9 @@ def show_legend(found_rules: dict):
         st.caption(" &nbsp;&nbsp; ".join(legend_bits), unsafe_allow_html=True)
 
 
-def arabic_block(html: str):
+def arabic_block(html: str, font_size: int = 30):
     st.markdown(
-        f'<div dir="rtl" style="font-size:30px; line-height:2.3; text-align:right; '
+        f'<div dir="rtl" style="font-size:{font_size}px; line-height:2.3; text-align:right; '
         f'font-family: \'UthmanTahaNaskh\', \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
         unsafe_allow_html=True,
     )
@@ -230,6 +230,18 @@ def get_husary_audio(sura: int, ayat: int) -> bytes | None:
 
 
 @st.cache_data(show_spinner=False)
+def get_surah_ayah_counts() -> dict:
+    """Возвращает {номер_суры: количество_аятов} — нужно для кнопок след./пред. аят."""
+    url = "https://api.alquran.cloud/v1/surah"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        return {s["number"]: s["numberOfAyahs"] for s in r.json()["data"]}
+    except (requests.RequestException, KeyError, ValueError):
+        return {}
+
+
+@st.cache_data(show_spinner=False)
 def get_ayah_text(sura: int, ayat: int) -> str | None:
     url = f"https://api.alquran.cloud/v1/ayah/{sura}:{ayat}/quran-uthmani"
     try:
@@ -241,23 +253,64 @@ def get_ayah_text(sura: int, ayat: int) -> str | None:
 
 
 @st.cache_data(show_spinner=False)
-def get_page_ayahs(page: int) -> list[dict] | None:
-    """Возвращает список аятов целой страницы мусхафа (1–604), с номерами суры/аята."""
-    url = f"https://api.alquran.cloud/v1/page/{page}/quran-uthmani"
+def get_ayah_translation(sura: int, ayat: int) -> str | None:
+    """Русский перевод (Эльмир Кулиев). Если не загрузится — просто не покажем перевод."""
+    url = f"https://api.alquran.cloud/v1/ayah/{sura}:{ayat}/ru.kuliev"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
-        data = r.json()["data"]["ayahs"]
+        return r.json()["data"]["text"]
+    except (requests.RequestException, KeyError, ValueError):
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def get_page_ayahs(page: int) -> list[dict] | None:
+    """Возвращает список аятов целой страницы мусхафа (1–604), с текстом и переводом."""
+    url = f"https://api.alquran.cloud/v1/page/{page}/editions/quran-uthmani,ru.kuliev"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        editions = r.json()["data"]
+        arabic_ayahs = editions[0]["ayahs"]
+        translation_ayahs = editions[1]["ayahs"] if len(editions) > 1 else []
         result = []
-        for a in data:
+        for i, a in enumerate(arabic_ayahs):
+            t = translation_ayahs[i]["text"] if i < len(translation_ayahs) else None
             result.append({
                 "text": a.get("text", ""),
+                "translation": t,
                 "sura": a.get("surah", {}).get("number"),
                 "ayat": a.get("numberInSurah"),
                 "sura_name": a.get("surah", {}).get("name", ""),
             })
         return result
-    except (requests.RequestException, KeyError, ValueError, TypeError):
+    except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def get_juz_ayahs(juz: int) -> list[dict] | None:
+    """Возвращает список аятов целого джуза (1–30), с текстом и переводом."""
+    url = f"https://api.alquran.cloud/v1/juz/{juz}/editions/quran-uthmani,ru.kuliev"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        editions = r.json()["data"]
+        arabic_ayahs = editions[0]["ayahs"]
+        translation_ayahs = editions[1]["ayahs"] if len(editions) > 1 else []
+        result = []
+        for i, a in enumerate(arabic_ayahs):
+            t = translation_ayahs[i]["text"] if i < len(translation_ayahs) else None
+            result.append({
+                "text": a.get("text", ""),
+                "translation": t,
+                "sura": a.get("surah", {}).get("number"),
+                "ayat": a.get("numberInSurah"),
+                "sura_name": a.get("surah", {}).get("name", ""),
+            })
+        return result
+    except (requests.RequestException, KeyError, ValueError, TypeError, IndexError):
         return None
 
 
@@ -428,83 +481,169 @@ def comparison_block_multi(ayah_list: list[dict], label: str):
 # Интерфейс
 # ---------------------------------------------------------------------------
 
-mode = st.radio("Режим чтения:", ["По аяту", "По странице мусхафа"], horizontal=True)
-show_tajweed = st.toggle("🎨 Подсветка правил таджвида", value=True)
+SURAH_AYAH_COUNTS = get_surah_ayah_counts()
+
+
+def next_ayah(sura: int, ayat: int) -> tuple[int, int]:
+    max_ayat = SURAH_AYAH_COUNTS.get(sura, 286)
+    if ayat < max_ayat:
+        return sura, ayat + 1
+    if sura < 114:
+        return sura + 1, 1
+    return sura, ayat
+
+
+def prev_ayah(sura: int, ayat: int) -> tuple[int, int]:
+    if ayat > 1:
+        return sura, ayat - 1
+    if sura > 1:
+        prev_sura = sura - 1
+        return prev_sura, SURAH_AYAH_COUNTS.get(prev_sura, 1)
+    return sura, ayat
+
+
+st.session_state.setdefault("cur_sura", 1)
+st.session_state.setdefault("cur_ayat", 1)
+st.session_state.setdefault("cur_page", 1)
+st.session_state.setdefault("cur_juz", 1)
+
+mode = st.radio("Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], horizontal=True)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
+with col_b:
+    show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
+
+font_size = st.select_slider(
+    "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
+)
+
+
+def render_ayah_with_translation(text: str, translation: str | None):
+    if show_tajweed:
+        html, found = render_tajweed_html(text)
+        arabic_block(html, font_size=font_size)
+        show_legend(found)
+    else:
+        arabic_block(text, font_size=font_size)
+    if show_translation and translation:
+        st.caption(translation)
+
+
+def multi_ayah_section(ayahs: list[dict], unit_key: str):
+    """Общий блок для страницы/джуза: показ текста + выбор способа записи."""
+    for a in ayahs:
+        render_ayah_with_translation(a["text"], a.get("translation"))
+    st.caption(f"Сур на этом фрагменте: {ayahs[0]['sura_name']} и др. — всего аятов: {len(ayahs)}")
+
+    st.markdown("---")
+    st.markdown("**Как будете записывать чтение?**")
+    record_mode = st.radio(
+        "Способ записи:",
+        ["Один аят", "Диапазон аятов", "Всё целиком"],
+        horizontal=True,
+        key=f"recmode_{unit_key}",
+    )
+
+    options = [f"{a['sura']}:{a['ayat']} — {a['sura_name']}" for a in ayahs]
+
+    if record_mode == "Один аят":
+        choice = st.selectbox("Аят для записи", options, key=f"sel_{unit_key}")
+        idx = options.index(choice)
+        chosen = ayahs[idx]
+        st.markdown("---")
+        comparison_block(chosen["sura"], chosen["ayat"])
+
+    elif record_mode == "Диапазон аятов":
+        c1, c2 = st.columns(2)
+        with c1:
+            start_choice = st.selectbox("С аята", options, index=0, key=f"start_{unit_key}")
+        with c2:
+            end_choice = st.selectbox("По аят", options, index=len(options) - 1, key=f"end_{unit_key}")
+        start_idx = options.index(start_choice)
+        end_idx = options.index(end_choice)
+        if start_idx > end_idx:
+            st.warning("Начальный аят должен быть раньше конечного.")
+        else:
+            selected = ayahs[start_idx:end_idx + 1]
+            st.caption(f"Выбрано аятов: {len(selected)}")
+            st.markdown("---")
+            comparison_block_multi(selected, label=f"{start_choice} — {end_choice}")
+
+    else:  # Всё целиком
+        st.caption(f"Будет записан и сравнён весь фрагмент целиком ({len(ayahs)} аятов).")
+        st.markdown("---")
+        comparison_block_multi(ayahs, label=unit_key)
+
 
 if mode == "По аяту":
+    nav1, nav2, nav3 = st.columns([1, 2, 1])
+    with nav1:
+        if st.button("◀ Пред. аят", use_container_width=True):
+            st.session_state["cur_sura"], st.session_state["cur_ayat"] = prev_ayah(
+                st.session_state["cur_sura"], st.session_state["cur_ayat"]
+            )
+    with nav3:
+        if st.button("След. аят ▶", use_container_width=True):
+            st.session_state["cur_sura"], st.session_state["cur_ayat"] = next_ayah(
+                st.session_state["cur_sura"], st.session_state["cur_ayat"]
+            )
+
     col1, col2 = st.columns(2)
     with col1:
-        sura = st.number_input("Номер суры", min_value=1, max_value=114, value=1, step=1)
+        sura = st.number_input("Номер суры", min_value=1, max_value=114, step=1, key="cur_sura")
     with col2:
-        ayat = st.number_input("Номер аята", min_value=1, max_value=286, value=1, step=1)
+        ayat = st.number_input("Номер аята", min_value=1, max_value=286, step=1, key="cur_ayat")
 
     st.markdown("### 📜 Текст аята")
     ayah_text = get_ayah_text(int(sura), int(ayat))
+    translation = get_ayah_translation(int(sura), int(ayat)) if show_translation else None
     if ayah_text:
-        if show_tajweed:
-            html, found = render_tajweed_html(ayah_text)
-            arabic_block(html)
-            show_legend(found)
-        else:
-            arabic_block(ayah_text)
+        render_ayah_with_translation(ayah_text, translation)
     else:
         st.warning("Не удалось загрузить текст аята.")
 
     st.markdown("---")
     comparison_block(int(sura), int(ayat))
 
-else:
-    page = st.number_input("Номер страницы мусхафа (1–604)", min_value=1, max_value=604, value=1, step=1)
+elif mode == "По странице мусхафа":
+    nav1, nav2, nav3 = st.columns([1, 2, 1])
+    with nav1:
+        if st.button("◀ Пред. страница", use_container_width=True):
+            st.session_state["cur_page"] = max(1, st.session_state["cur_page"] - 1)
+    with nav3:
+        if st.button("След. страница ▶", use_container_width=True):
+            st.session_state["cur_page"] = min(604, st.session_state["cur_page"] + 1)
 
+    page = st.number_input("Номер страницы мусхафа (1–604)", min_value=1, max_value=604, step=1, key="cur_page")
     ayahs = get_page_ayahs(int(page))
     st.markdown(f"### 📜 Страница {int(page)}")
 
     if ayahs:
-        for a in ayahs:
-            if show_tajweed:
-                html, _ = render_tajweed_html(a["text"])
-                arabic_block(html)
-            else:
-                arabic_block(a["text"])
-        st.caption(f"На странице: {ayahs[0]['sura_name']} — всего аятов: {len(ayahs)}")
-
-        st.markdown("---")
-        st.markdown("**Как будете записывать чтение?**")
-        record_mode = st.radio(
-            "Способ записи:",
-            ["Один аят", "Диапазон аятов", "Вся страница"],
-            horizontal=True,
-            key=f"recmode_{page}",
-        )
-
-        options = [f"{a['sura']}:{a['ayat']} — {a['sura_name']}" for a in ayahs]
-
-        if record_mode == "Один аят":
-            choice = st.selectbox("Аят для записи", options)
-            idx = options.index(choice)
-            chosen = ayahs[idx]
-            st.markdown("---")
-            comparison_block(chosen["sura"], chosen["ayat"])
-
-        elif record_mode == "Диапазон аятов":
-            c1, c2 = st.columns(2)
-            with c1:
-                start_choice = st.selectbox("С аята", options, index=0)
-            with c2:
-                end_choice = st.selectbox("По аят", options, index=len(options) - 1)
-            start_idx = options.index(start_choice)
-            end_idx = options.index(end_choice)
-            if start_idx > end_idx:
-                st.warning("Начальный аят должен быть раньше конечного.")
-            else:
-                selected = ayahs[start_idx:end_idx + 1]
-                st.caption(f"Выбрано аятов: {len(selected)}")
-                st.markdown("---")
-                comparison_block_multi(selected, label=f"{start_choice} — {end_choice}")
-
-        else:  # Вся страница
-            st.caption(f"Будет записана и сравнена вся страница целиком ({len(ayahs)} аятов).")
-            st.markdown("---")
-            comparison_block_multi(ayahs, label=f"Страница {int(page)}")
+        multi_ayah_section(ayahs, unit_key=f"page{int(page)}")
     else:
         st.warning("Не удалось загрузить эту страницу. Проверьте номер (1–604).")
+
+else:  # По джузу
+    nav1, nav2, nav3 = st.columns([1, 2, 1])
+    with nav1:
+        if st.button("◀ Пред. джуз", use_container_width=True):
+            st.session_state["cur_juz"] = max(1, st.session_state["cur_juz"] - 1)
+    with nav3:
+        if st.button("След. джуз ▶", use_container_width=True):
+            st.session_state["cur_juz"] = min(30, st.session_state["cur_juz"] + 1)
+
+    juz = st.number_input("Номер джуза (1–30)", min_value=1, max_value=30, step=1, key="cur_juz")
+    ayahs = get_juz_ayahs(int(juz))
+    st.markdown(f"### 📜 Джуз {int(juz)}")
+
+    if ayahs:
+        st.caption(
+            f"В этом джузе {len(ayahs)} аятов — для ежедневной нормы в 1 джуз в день "
+            f"Коран прочитывается за 30 дней."
+        )
+        multi_ayah_section(ayahs, unit_key=f"juz{int(juz)}")
+    else:
+        st.warning("Не удалось загрузить этот джуз. Проверьте номер (1–30).")
+
