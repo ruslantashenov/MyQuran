@@ -392,7 +392,8 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str 
 def comparison_block(sura: int, ayat: int):
     """Сравнение для одного аята."""
     ref_audio = get_husary_audio(sura, ayat)
-    comparison_ui(ref_audio, key=f"{sura}_{ayat}", label=f"Аят {sura}:{ayat}")
+    ayah_text = get_ayah_text(sura, ayat)
+    comparison_ui(ref_audio, key=f"{sura}_{ayat}", label=f"Аят {sura}:{ayat}", ayah_text=ayah_text)
 
 
 def comparison_block_multi(ayah_list: list[dict], label: str):
@@ -400,7 +401,8 @@ def comparison_block_multi(ayah_list: list[dict], label: str):
     refs = tuple((a["sura"], a["ayat"]) for a in ayah_list)
     ref_audio = combine_ayah_audio(refs)
     key = "_".join(f"{s}-{a}" for s, a in refs)
-    comparison_ui(ref_audio, key=key, label=label)
+    combined_text = " ".join(a["text"] for a in ayah_list)
+    comparison_ui(ref_audio, key=key, label=label, ayah_text=combined_text)
 
 
 # ---------------------------------------------------------------------------
