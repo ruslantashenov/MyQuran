@@ -718,15 +718,17 @@ def render_ayah_with_translation(text: str, translation: str | None, ayat_number
         st.caption(translation)
 
 
-def multi_ayah_section(ayahs: list[dict], unit_key: str):
-    """Общий блок для страницы/джуза: показ текста + выбор способа записи."""
+def render_ayahs_text(ayahs: list[dict]):
+    """Показ текста аятов (без блока записи)."""
     if show_translation and not any(a.get("translation") for a in ayahs):
         st.caption("ℹ️ Перевод для этого фрагмента сейчас не загрузился — показан только арабский текст.")
     for a in ayahs:
         render_ayah_with_translation(a["text"], a.get("translation"), ayat_number=a.get("ayat"))
     st.caption(f"Сур на этом фрагменте: {ayahs[0]['sura_name']} и др. — всего аятов: {len(ayahs)}")
 
-    st.markdown("---")
+
+def render_recording_section(ayahs: list[dict], unit_key: str):
+    """Блок выбора способа записи и сравнения с эталоном."""
     st.markdown("**Как будете записывать чтение?**")
     record_mode = st.radio(
         "Способ записи:",
@@ -817,7 +819,7 @@ elif mode == "По странице мусхафа":
     st.markdown(f"### 📜 Страница {int(page)}")
 
     if ayahs:
-        multi_ayah_section(ayahs, unit_key=f"page{int(page)}")
+        render_ayahs_text(ayahs)
 
         st.markdown("---")
         nav1b, nav2b, nav3b = st.columns([1, 2, 1])
@@ -829,6 +831,9 @@ elif mode == "По странице мусхафа":
             if st.button("След. страница ▶", use_container_width=True, key="page_next_bottom"):
                 st.session_state["cur_page"] = min(604, st.session_state["cur_page"] + 1)
                 st.rerun()
+        st.markdown("---")
+
+        render_recording_section(ayahs, unit_key=f"page{int(page)}")
     else:
         st.warning("Не удалось загрузить эту страницу. Проверьте номер (1–604).")
 
@@ -857,7 +862,7 @@ else:  # По джузу
             f"В этом джузе {len(ayahs)} аятов — для ежедневной нормы в 1 джуз в день "
             f"Коран прочитывается за 30 дней."
         )
-        multi_ayah_section(ayahs, unit_key=f"juz{int(juz)}")
+        render_ayahs_text(ayahs)
 
         st.markdown("---")
         nav1b, nav2b, nav3b = st.columns([1, 2, 1])
@@ -869,6 +874,9 @@ else:  # По джузу
             if st.button("След. джуз ▶", use_container_width=True, key="juz_next_bottom"):
                 st.session_state["cur_juz"] = min(30, st.session_state["cur_juz"] + 1)
                 st.rerun()
+        st.markdown("---")
+
+        render_recording_section(ayahs, unit_key=f"juz{int(juz)}")
     else:
         st.warning("Не удалось загрузить этот джуз. Проверьте номер (1–30).")
 
