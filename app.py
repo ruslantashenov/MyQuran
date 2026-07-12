@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import librosa
 import numpy as np
 import requests
@@ -244,6 +245,23 @@ def with_ayah_marker(text: str, ayat_number: int | None) -> str:
     if ayat_number is None:
         return text
     return f"{text} ۝{to_arabic_indic(ayat_number)}"
+
+
+def scroll_to_top():
+    """Прокручивает страницу наверх — используется при переходе на другую
+    страницу/джуз, чтобы всегда начинать чтение с самого верха."""
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        const container = doc.querySelector('[data-testid="stAppViewContainer"]')
+            || doc.querySelector('.main') || doc.body;
+        container.scrollTo(0, 0);
+        window.parent.scrollTo(0, 0);
+        </script>
+        """,
+        height=0,
+    )
 
 
 def arabic_block(html: str, font_size: int = 30):
@@ -523,6 +541,19 @@ def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     }
 
 
+def render_flagged_words_html(ayah_text: str, flagged_words: set[int]) -> str:
+    """Подсвечивает ЦЕЛИКОМ отмеченные слова (не по буквам!), чтобы не ломать
+    соединение арабских букв внутри слова."""
+    words = ayah_text.split(" ")
+    parts = []
+    for i, w in enumerate(words):
+        if i in flagged_words:
+            parts.append(f'<span style="color:#DD0008; text-decoration:underline;">{w}</span>')
+        else:
+            parts.append(w)
+    return " ".join(parts)
+
+
 def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str | None = None):
     """Общий блок: эталонное аудио + запись + сравнение. ref_audio может быть
     записью одного аята или склеенным диапазоном/целой страницей.
@@ -564,7 +595,7 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str 
             with st.spinner("Ищу места расхождения со звуком эталона..."):
                 flagged = find_mismatch_words(ayah_text, ref_audio, user_bytes)
             st.markdown("**🔴 Слова с наибольшим акустическим расхождением:**")
-            html, _ = render_tajweed_html(ayah_text, flagged_words=flagged)
+            html = render_flagged_words_html(ayah_text, flagged)
             arabic_block(html, font_size=font_size)
             if flagged:
                 for desc in describe_flagged_words(ayah_text, flagged):
@@ -664,7 +695,6 @@ with st.sidebar:
         "Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], key="reading_mode"
     )
     st.divider()
-    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
     show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
 
     translation_edition = "ru.kuliev"
@@ -683,12 +713,7 @@ with st.sidebar:
 
 def render_ayah_with_translation(text: str, translation: str | None, ayat_number: int | None = None):
     display_text = with_ayah_marker(text, ayat_number)
-    if show_tajweed:
-        html, found = render_tajweed_html(display_text)
-        arabic_block(html, font_size=font_size)
-        show_legend(found)
-    else:
-        arabic_block(display_text, font_size=font_size)
+    arabic_block(display_text, font_size=font_size)
     if show_translation and translation:
         st.caption(translation)
 
@@ -772,33 +797,58 @@ if mode == "По аяту":
     comparison_block(int(sura), int(ayat))
 
 elif mode == "По странице мусхафа":
+    st.session_state.setdefault("last_seen_page", st.session_state["cur_page"])
+
     nav1, nav2, nav3 = st.columns([1, 2, 1])
     with nav1:
-        if st.button("◀ Пред. страница", use_container_width=True):
+        if st.button("◀ Пред. страница", use_container_width=True, key="page_prev_top"):
             st.session_state["cur_page"] = max(1, st.session_state["cur_page"] - 1)
     with nav3:
-        if st.button("След. страница ▶", use_container_width=True):
+        if st.button("След. страница ▶", use_container_width=True, key="page_next_top"):
             st.session_state["cur_page"] = min(604, st.session_state["cur_page"] + 1)
 
     page = st.number_input("Номер страницы мусхафа (1–604)", min_value=1, max_value=604, step=1, key="cur_page")
+
+    if int(page) != st.session_state["last_seen_page"]:
+        st.session_state["last_seen_page"] = int(page)
+        scroll_to_top()
+
     ayahs = get_page_ayahs(int(page), translation_edition)
     st.markdown(f"### 📜 Страница {int(page)}")
 
     if ayahs:
         multi_ayah_section(ayahs, unit_key=f"page{int(page)}")
+
+        st.markdown("---")
+        nav1b, nav2b, nav3b = st.columns([1, 2, 1])
+        with nav1b:
+            if st.button("◀ Пред. страница", use_container_width=True, key="page_prev_bottom"):
+                st.session_state["cur_page"] = max(1, st.session_state["cur_page"] - 1)
+                st.rerun()
+        with nav3b:
+            if st.button("След. страница ▶", use_container_width=True, key="page_next_bottom"):
+                st.session_state["cur_page"] = min(604, st.session_state["cur_page"] + 1)
+                st.rerun()
     else:
         st.warning("Не удалось загрузить эту страницу. Проверьте номер (1–604).")
 
 else:  # По джузу
+    st.session_state.setdefault("last_seen_juz", st.session_state["cur_juz"])
+
     nav1, nav2, nav3 = st.columns([1, 2, 1])
     with nav1:
-        if st.button("◀ Пред. джуз", use_container_width=True):
+        if st.button("◀ Пред. джуз", use_container_width=True, key="juz_prev_top"):
             st.session_state["cur_juz"] = max(1, st.session_state["cur_juz"] - 1)
     with nav3:
-        if st.button("След. джуз ▶", use_container_width=True):
+        if st.button("След. джуз ▶", use_container_width=True, key="juz_next_top"):
             st.session_state["cur_juz"] = min(30, st.session_state["cur_juz"] + 1)
 
     juz = st.number_input("Номер джуза (1–30)", min_value=1, max_value=30, step=1, key="cur_juz")
+
+    if int(juz) != st.session_state["last_seen_juz"]:
+        st.session_state["last_seen_juz"] = int(juz)
+        scroll_to_top()
+
     ayahs = get_juz_ayahs(int(juz), translation_edition)
     st.markdown(f"### 📜 Джуз {int(juz)}")
 
@@ -808,6 +858,17 @@ else:  # По джузу
             f"Коран прочитывается за 30 дней."
         )
         multi_ayah_section(ayahs, unit_key=f"juz{int(juz)}")
+
+        st.markdown("---")
+        nav1b, nav2b, nav3b = st.columns([1, 2, 1])
+        with nav1b:
+            if st.button("◀ Пред. джуз", use_container_width=True, key="juz_prev_bottom"):
+                st.session_state["cur_juz"] = max(1, st.session_state["cur_juz"] - 1)
+                st.rerun()
+        with nav3b:
+            if st.button("След. джуз ▶", use_container_width=True, key="juz_next_bottom"):
+                st.session_state["cur_juz"] = min(30, st.session_state["cur_juz"] + 1)
+                st.rerun()
     else:
         st.warning("Не удалось загрузить этот джуз. Проверьте номер (1–30).")
 
