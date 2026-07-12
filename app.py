@@ -65,18 +65,45 @@ if font_css:
 elif font_debug:
     st.warning(f"⚠️ Шрифт не подключился: {font_debug}")
 
-st.title("📖 Личный тренажёр чтения Корана")
-st.caption("Эталон: шейх Махмуд Халиль аль-Хусари")
-
-st.info(
-    "⚠️ **Важно понимать, что именно измеряет этот инструмент.** "
-    "Он сравнивает темп, ритм и общий звуковой рисунок вашего чтения с эталонным, "
-    "и подсвечивает в тексте, ГДЕ по правилам должны применяться таджвид-правила "
-    "(это определяется из письменного текста — надёжно). "
-    "Но он **не проверяет на слух**, правильно ли вы сделали саму гунну, ихфа или "
-    "идгам — для этого нужен человек. Используйте как помощь для самоконтроля "
-    "и подсказку, где именно вслушаться в эталон."
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 780px; }
+    h1 { font-weight: 700 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.6rem; }
+    div.stButton > button, div.stDownloadButton > button {
+        border-radius: 10px; font-weight: 600;
+    }
+    div[data-testid="stExpander"] { border-radius: 12px; }
+    .streamlit-expanderHeader { font-weight: 600; }
+    hr { margin: 1.2rem 0; opacity: 0.25; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+
+st.markdown(
+    """
+    <div style="text-align:center; padding: 0.3rem 0 0.6rem 0;">
+        <div style="font-size:2.1rem; font-weight:700;">📖 MyQuran</div>
+        <div style="opacity:0.65; font-size:0.95rem;">
+            Личный тренажёр чтения Корана · эталон — шейх Махмуд Халиль аль-Хусари
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+with st.expander("ℹ️ Что умеет и чего не умеет это приложение — прочитайте перед началом"):
+    st.markdown(
+        "**Важно понимать, что именно измеряет этот инструмент.** "
+        "Он сравнивает темп, ритм и общий звуковой рисунок вашего чтения с эталонным, "
+        "и подсвечивает в тексте, ГДЕ по правилам должны применяться таджвид-правила "
+        "(это определяется из письменного текста — надёжно). "
+        "Но он **не проверяет на слух**, правильно ли вы сделали саму гунну, ихфа или "
+        "идгам — для этого нужен человек. Используйте как помощь для самоконтроля "
+        "и подсказку, где именно вслушаться в эталон."
+    )
 
 # ---------------------------------------------------------------------------
 # Правила таджвида: определяем по написанному тексту (надёжно, без ИИ)
@@ -205,10 +232,27 @@ def show_legend(found_rules: dict):
         st.caption(" &nbsp;&nbsp; ".join(legend_bits), unsafe_allow_html=True)
 
 
+ARABIC_INDIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
+
+
+def to_arabic_indic(n: int) -> str:
+    return "".join(ARABIC_INDIC_DIGITS[int(d)] for d in str(n))
+
+
+def with_ayah_marker(text: str, ayat_number: int | None) -> str:
+    """Добавляет орнаментальный знак конца аята ۝ с номером — только для показа."""
+    if ayat_number is None:
+        return text
+    return f"{text} ۝{to_arabic_indic(ayat_number)}"
+
+
 def arabic_block(html: str, font_size: int = 30):
     st.markdown(
-        f'<div dir="rtl" style="font-size:{font_size}px; line-height:2.3; text-align:right; '
-        f'font-family: \'UthmanTahaNaskh\', \'Traditional Arabic\', \'Amiri\', serif;">{html}</div>',
+        f'<div dir="rtl" style="font-size:{font_size}px; line-height:2.4; text-align:right; '
+        f'font-family: \'UthmanTahaNaskh\', \'Traditional Arabic\', \'Amiri\', serif; '
+        f'font-feature-settings: \'liga\' 1, \'calt\' 1, \'rlig\' 1, \'ccmp\' 1, \'init\' 1, \'medi\' 1, \'fina\' 1; '
+        f'-webkit-font-feature-settings: \'liga\' 1, \'calt\' 1, \'rlig\' 1; '
+        f'text-rendering: optimizeLegibility; unicode-bidi: isolate;">{html}</div>',
         unsafe_allow_html=True,
     )
 
@@ -429,6 +473,31 @@ def find_mismatch_words(ayah_text: str, ref_bytes: bytes, user_bytes: bytes) -> 
         return set()
 
 
+def describe_flagged_words(ayah_text: str, flagged: set[int]) -> list[str]:
+    """Для каждого отмеченного слова формирует пояснение: что именно в нём есть
+    по таджвиду (если есть) — чтобы человек знал, ЧТО именно перепроверить."""
+    words = ayah_text.split(" ")
+    descriptions = []
+    for i in sorted(flagged):
+        if i >= len(words):
+            continue
+        word = words[i]
+        spans = analyze_word_tajweed(word)
+        rules_here = sorted({TAJWEED_COLORS[r][1] for _, _, r in spans})
+        if rules_here:
+            descriptions.append(
+                f"**Слово {i + 1}** «{word}» — прозвучало заметно иначе, чем у эталона. "
+                f"В этом слове есть: {', '.join(rules_here)} — вероятно, дело в этом "
+                f"(например, длительность мадда или назализация при ихфа/идгаме)."
+            )
+        else:
+            descriptions.append(
+                f"**Слово {i + 1}** «{word}» — прозвучало заметно иначе, чем у эталона "
+                f"в этом месте записи (может быть другое слово, запинка или пауза)."
+            )
+    return descriptions
+
+
 def analyze_audio(ref_bytes: bytes, user_bytes: bytes) -> dict:
     y_ref, sr_ref = librosa.load(io.BytesIO(ref_bytes), sr=None)
     y_user, sr_user = librosa.load(io.BytesIO(user_bytes), sr=None)
@@ -496,13 +565,13 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str 
                 flagged = find_mismatch_words(ayah_text, ref_audio, user_bytes)
             st.markdown("**🔴 Слова с наибольшим акустическим расхождением:**")
             html, _ = render_tajweed_html(ayah_text, flagged_words=flagged)
-            arabic_block(html)
+            arabic_block(html, font_size=font_size)
             if flagged:
+                for desc in describe_flagged_words(ayah_text, flagged):
+                    st.markdown(f"- {desc}")
                 st.warning(
-                    "Слова с красной подчёркой звучали заметно иначе, чем в эталоне "
-                    "в это же время записи. Это **не подтверждённая ошибка** — просто "
-                    "сигнал 'вслушайтесь сюда ещё раз'. Причиной может быть неверное "
-                    "слово, запинка, пауза длиннее обычной или просто шум записи."
+                    "Это **не подтверждённая ошибка**, а сигнал 'вслушайтесь сюда ещё раз' — "
+                    "основано на разнице звучания, а не на распознавании речи."
                 )
             else:
                 st.caption("Явных мест сильного расхождения не найдено.")
@@ -561,6 +630,28 @@ st.session_state.setdefault("cur_page", 1)
 st.session_state.setdefault("cur_juz", 1)
 st.session_state.setdefault("reading_mode", "По аяту")
 
+with st.sidebar:
+    st.markdown("### ⚙️ Настройки")
+    mode = st.radio(
+        "Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], key="reading_mode"
+    )
+    st.divider()
+    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
+    show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
+
+    translation_edition = "ru.kuliev"
+    if show_translation:
+        translation_name = st.selectbox("Переводчик", list(RUSSIAN_TRANSLATIONS.values()), index=0)
+        translation_edition = next(
+            code for code, name in RUSSIAN_TRANSLATIONS.items() if name == translation_name
+        )
+
+    font_size = st.select_slider(
+        "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
+    )
+    st.divider()
+    st.caption("📖 MyQuran · тренажёр чтения\nЭталон: шейх аль-Хусари")
+
 with st.expander("🔖 Быстрый переход (как закладка в книге)"):
     jc1, jc2 = st.columns(2)
     with jc1:
@@ -589,33 +680,15 @@ with st.expander("🔖 Быстрый переход (как закладка в
             else:
                 st.warning("Не удалось определить страницу этого джуза.")
 
-mode = st.radio("Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], horizontal=True, key="reading_mode")
 
-col_a, col_b = st.columns(2)
-with col_a:
-    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
-with col_b:
-    show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
-
-translation_edition = "ru.kuliev"
-if show_translation:
-    translation_name = st.selectbox("Переводчик", list(RUSSIAN_TRANSLATIONS.values()), index=0)
-    translation_edition = next(
-        code for code, name in RUSSIAN_TRANSLATIONS.items() if name == translation_name
-    )
-
-font_size = st.select_slider(
-    "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
-)
-
-
-def render_ayah_with_translation(text: str, translation: str | None):
+def render_ayah_with_translation(text: str, translation: str | None, ayat_number: int | None = None):
+    display_text = with_ayah_marker(text, ayat_number)
     if show_tajweed:
-        html, found = render_tajweed_html(text)
+        html, found = render_tajweed_html(display_text)
         arabic_block(html, font_size=font_size)
         show_legend(found)
     else:
-        arabic_block(text, font_size=font_size)
+        arabic_block(display_text, font_size=font_size)
     if show_translation and translation:
         st.caption(translation)
 
@@ -625,7 +698,7 @@ def multi_ayah_section(ayahs: list[dict], unit_key: str):
     if show_translation and not any(a.get("translation") for a in ayahs):
         st.caption("ℹ️ Перевод для этого фрагмента сейчас не загрузился — показан только арабский текст.")
     for a in ayahs:
-        render_ayah_with_translation(a["text"], a.get("translation"))
+        render_ayah_with_translation(a["text"], a.get("translation"), ayat_number=a.get("ayat"))
     st.caption(f"Сур на этом фрагменте: {ayahs[0]['sura_name']} и др. — всего аятов: {len(ayahs)}")
 
     st.markdown("---")
@@ -691,7 +764,7 @@ if mode == "По аяту":
     ayah_text = get_ayah_text(int(sura), int(ayat))
     translation = get_ayah_translation(int(sura), int(ayat), translation_edition) if show_translation else None
     if ayah_text:
-        render_ayah_with_translation(ayah_text, translation)
+        render_ayah_with_translation(ayah_text, translation, ayat_number=int(ayat))
     else:
         st.warning("Не удалось загрузить текст аята.")
 
