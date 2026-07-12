@@ -11,6 +11,13 @@ import soundfile as sf
 st.set_page_config(page_title="Тренажёр чтения Корана", page_icon="📖", layout="centered")
 
 
+GOOGLE_FONT_CSS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&display=swap" rel="stylesheet">'
+)
+
+
 @st.cache_data(show_spinner=False)
 def load_font_css() -> tuple[str, str]:
     """Встраивает шрифт Uthman Taha Naskh (файл рядом с app.py) через @font-face.
@@ -60,11 +67,13 @@ def load_font_css() -> tuple[str, str]:
     return css, ""
 
 
+st.markdown(GOOGLE_FONT_CSS, unsafe_allow_html=True)
+
 font_css, font_debug = load_font_css()
 if font_css:
     st.markdown(font_css, unsafe_allow_html=True)
 elif font_debug:
-    st.warning(f"⚠️ Шрифт не подключился: {font_debug}")
+    st.caption(f"ℹ️ Свой шрифт не подключён ({font_debug}) — используется Amiri Quran.")
 
 st.markdown(
     """
@@ -264,10 +273,10 @@ def scroll_to_top():
     )
 
 
-def arabic_block(html: str, font_size: int = 30):
+def arabic_block(html: str, font_size: int = 30, font_family: str = "'Amiri Quran', 'Traditional Arabic', serif"):
     st.markdown(
         f'<div dir="rtl" style="font-size:{font_size}px; line-height:2.4; text-align:right; '
-        f'font-family: \'UthmanTahaNaskh\', \'Traditional Arabic\', \'Amiri\', serif; '
+        f'font-family: {font_family}; '
         f'font-feature-settings: \'liga\' 1, \'calt\' 1, \'rlig\' 1, \'ccmp\' 1, \'init\' 1, \'medi\' 1, \'fina\' 1; '
         f'-webkit-font-feature-settings: \'liga\' 1, \'calt\' 1, \'rlig\' 1; '
         f'text-rendering: optimizeLegibility; unicode-bidi: isolate;">{html}</div>',
@@ -596,7 +605,7 @@ def comparison_ui(ref_audio: bytes | None, key: str, label: str, ayah_text: str 
                 flagged = find_mismatch_words(ayah_text, ref_audio, user_bytes)
             st.markdown("**🔴 Слова с наибольшим акустическим расхождением:**")
             html = render_flagged_words_html(ayah_text, flagged)
-            arabic_block(html, font_size=font_size)
+            arabic_block(html, font_size=font_size, font_family=font_family)
             if flagged:
                 for desc in describe_flagged_words(ayah_text, flagged):
                     st.markdown(f"- {desc}")
@@ -707,13 +716,25 @@ with st.sidebar:
     font_size = st.select_slider(
         "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
     )
+
+    font_choice = st.radio(
+        "Шрифт арабского текста",
+        ["Amiri Quran (рекомендуется)", "Uthman Taha Naskh (свой файл)"],
+        index=0,
+    )
+    font_family = (
+        "'Amiri Quran', 'Traditional Arabic', serif"
+        if font_choice.startswith("Amiri")
+        else "'UthmanTahaNaskh', 'Amiri Quran', 'Traditional Arabic', serif"
+    )
+
     st.divider()
     st.caption("📖 MyQuran · тренажёр чтения\nЭталон: шейх аль-Хусари")
 
 
 def render_ayah_with_translation(text: str, translation: str | None, ayat_number: int | None = None):
     display_text = with_ayah_marker(text, ayat_number)
-    arabic_block(display_text, font_size=font_size)
+    arabic_block(display_text, font_size=font_size, font_family=font_family)
     if show_translation and translation:
         st.caption(translation)
 
