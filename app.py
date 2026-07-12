@@ -630,28 +630,6 @@ st.session_state.setdefault("cur_page", 1)
 st.session_state.setdefault("cur_juz", 1)
 st.session_state.setdefault("reading_mode", "По аяту")
 
-with st.sidebar:
-    st.markdown("### ⚙️ Настройки")
-    mode = st.radio(
-        "Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], key="reading_mode"
-    )
-    st.divider()
-    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
-    show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
-
-    translation_edition = "ru.kuliev"
-    if show_translation:
-        translation_name = st.selectbox("Переводчик", list(RUSSIAN_TRANSLATIONS.values()), index=0)
-        translation_edition = next(
-            code for code, name in RUSSIAN_TRANSLATIONS.items() if name == translation_name
-        )
-
-    font_size = st.select_slider(
-        "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
-    )
-    st.divider()
-    st.caption("📖 MyQuran · тренажёр чтения\nЭталон: шейх аль-Хусари")
-
 with st.expander("🔖 Быстрый переход (как закладка в книге)"):
     jc1, jc2 = st.columns(2)
     with jc1:
@@ -679,6 +657,28 @@ with st.expander("🔖 Быстрый переход (как закладка в
                 st.rerun()
             else:
                 st.warning("Не удалось определить страницу этого джуза.")
+
+with st.sidebar:
+    st.markdown("### ⚙️ Настройки")
+    mode = st.radio(
+        "Режим чтения:", ["По аяту", "По странице мусхафа", "По джузу"], key="reading_mode"
+    )
+    st.divider()
+    show_tajweed = st.toggle("🎨 Подсветка таджвида", value=True)
+    show_translation = st.toggle("🇷🇺 Показывать перевод", value=True)
+
+    translation_edition = "ru.kuliev"
+    if show_translation:
+        translation_name = st.selectbox("Переводчик", list(RUSSIAN_TRANSLATIONS.values()), index=0)
+        translation_edition = next(
+            code for code, name in RUSSIAN_TRANSLATIONS.items() if name == translation_name
+        )
+
+    font_size = st.select_slider(
+        "Размер арабского текста", options=[24, 28, 32, 36, 40, 44, 48], value=32
+    )
+    st.divider()
+    st.caption("📖 MyQuran · тренажёр чтения\nЭталон: шейх аль-Хусари")
 
 
 def render_ayah_with_translation(text: str, translation: str | None, ayat_number: int | None = None):
