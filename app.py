@@ -273,7 +273,7 @@ def scroll_to_top():
     )
 
 
-def arabic_block(html: str, font_size: int = 30, font_family: str = "'Amiri Quran', 'Traditional Arabic', serif"):
+def arabic_block(html: str, font_size: int = 30, font_family: str = "'UthmanTahaNaskh', 'Amiri Quran', 'Traditional Arabic', serif"):
     st.markdown(
         f'<div dir="rtl" style="font-size:{font_size}px; line-height:2.4; text-align:right; '
         f'font-family: {font_family}; '
@@ -719,13 +719,13 @@ with st.sidebar:
 
     font_choice = st.radio(
         "Шрифт арабского текста",
-        ["Amiri Quran (рекомендуется)", "Uthman Taha Naskh (свой файл)"],
+        ["Uthman Taha Naskh", "Amiri Quran (альтернатива)"],
         index=0,
     )
     font_family = (
-        "'Amiri Quran', 'Traditional Arabic', serif"
-        if font_choice.startswith("Amiri")
-        else "'UthmanTahaNaskh', 'Amiri Quran', 'Traditional Arabic', serif"
+        "'UthmanTahaNaskh', 'Amiri Quran', 'Traditional Arabic', serif"
+        if font_choice.startswith("Uthman")
+        else "'Amiri Quran', 'Traditional Arabic', serif"
     )
 
     st.divider()
